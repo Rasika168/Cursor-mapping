@@ -1,0 +1,76 @@
+1. Canvas & Base Visualization
+Interactive graph canvas with customizable grid background (studio grey #333333).​
+
+Supports zoom/pan and grid settings as already present in your UI.
+
+Gradients rendered in real time, updating instantly with any interaction.
+
+2. Gradient Points (Nodes)
+User can add unlimited color points directly on the canvas by clicking/tapping.
+
+Each point is shown as a draggable circular node, with subtle drop shadow for visibility.
+
+Upon selecting a point, an overlay reveals its influence radius (resizable by dragging a handle).
+
+Points can be moved freely anywhere on the canvas; their position directly affects the gradient layout and direction.
+
+Points can be duplicated or deleted by right-click or keyboard shortcut.
+
+3. Color & Influence Controls
+Clicking a point opens a floating color picker with HEX/HSB/RGB/Opacity controls.
+
+Each point's influence radius controls spread—drag out/in to adjust (with live preview).
+
+Opacity slider for each node controls blend strength. Option to set “hard edge” or “soft edge” if the blend is sharp or smooth.
+
+Color harmonies or recent brand colors accessible for fast selection.
+
+Display color value and influence settings in a properties sidebar or tooltip.
+
+4. Advanced Gradient Configuration
+All points blend naturally, creating a “mesh” or “freeform” gradient.
+
+Option to toggle point overlays for a clean canvas.
+
+Blend mode selector (e.g., normal, multiply, overlay) for advanced visual effects.
+
+Add/remove points at any time, supporting iterative experimentation.
+
+5. UX & UI Integration
+Real-time rendering of both color and influence changes as points are edited.
+
+Undo/redo support for all point manipulation actions.
+
+Intelligent collision detection prevents overlapping controls.
+
+Keyboard navigation for precise adjustments (arrow keys, tab to select next point).
+
+Live gradient preview updates while dragging or editing any point.
+
+6. Export & Save
+Export current view as PNG, SVG, or PDF (with or without overlays).
+
+Save freeform gradient configuration (positions/colors/radii) as JSON.
+
+Option to import/export gradient presets for use in other projects.
+
+7. Brand Analysis Integration
+Brand markers or analysis overlays can be superimposed as needed.
+
+Gradient intensity visually connects brand positioning to heat zones, supporting multi-sensory theme.
+
+Labels for axes and corners remain editable and functional alongside gradient layer.
+
+8. Accessibility & Usability
+All controls are touch-friendly (minimum target size 44px).
+
+Tooltips and description overlays for each feature.
+
+WCAG-compliant color contrast, keyboard navigation, and aria-labels.
+
+9. Technical Implementation Notes
+Efficient gradient blending (WebGL/Canvas 2D for large-data performance).
+
+Data model stores: x/y position, color, opacity, influence radius for each node.
+
+Integrates seamlessly with existing axis, typography, and grid modules.
