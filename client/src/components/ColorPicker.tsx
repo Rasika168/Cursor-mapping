@@ -192,122 +192,28 @@ export default function ColorPicker({ point, onUpdate, onClose, hideClose }: Col
 
           {point.gradientType === 'solid' ? (
             <div className="mt-4 pt-4 border-t border-border">
-              <Tabs defaultValue="hex" className="w-full">
-                <TabsList className="grid w-full grid-cols-3">
-                  <TabsTrigger value="hex" data-testid="tab-hex-inline">HEX</TabsTrigger>
-                  <TabsTrigger value="hsb" data-testid="tab-hsb-inline">HSB</TabsTrigger>
-                  <TabsTrigger value="rgb" data-testid="tab-rgb-inline">RGB</TabsTrigger>
-                </TabsList>
-
-                <TabsContent value="hex" className="space-y-3">
-                  <div>
-                    <Label htmlFor="hex-inline" className="text-xs">HEX Value</Label>
-                    <Input
-                      id="hex-inline"
-                      value={hexInput}
-                      onChange={(e) => handleHexChange(e.target.value)}
-                      className="font-mono mt-1"
-                      data-testid="input-hex-inline"
-                    />
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="hsb" className="space-y-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Hue</Label>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {Math.round(hsb.h)}°
-                      </span>
-                    </div>
-                    <Slider
-                      value={[hsb.h]}
-                      onValueChange={([v]) => handleHsbChange(v)}
-                      max={360}
-                      step={1}
-                    />
-                    <div
-                      className="h-3 rounded-full w-full mt-2"
-                      style={{
-                        background: 'linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000)'
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Saturation</Label>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {Math.round(hsb.s)}%
-                      </span>
-                    </div>
-                    <Slider
-                      value={[hsb.s]}
-                      onValueChange={([v]) => handleHsbChange(undefined, v)}
-                      max={100}
-                      step={1}
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Brightness</Label>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {Math.round(hsb.b)}%
-                      </span>
-                    </div>
-                    <Slider
-                      value={[hsb.b]}
-                      onValueChange={([v]) => handleHsbChange(undefined, undefined, v)}
-                      max={100}
-                      step={1}
-                    />
-                  </div>
-                </TabsContent>
-
-                <TabsContent value="rgb" className="space-y-3">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Red</Label>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {rgb?.r || 0}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[rgb?.r || 0]}
-                      onValueChange={([v]) => handleRgbChange(v)}
-                      max={255}
-                      step={1}
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Green</Label>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {rgb?.g || 0}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[rgb?.g || 0]}
-                      onValueChange={([v]) => handleRgbChange(undefined, v)}
-                      max={255}
-                      step={1}
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <Label className="text-xs">Blue</Label>
-                      <span className="text-xs text-muted-foreground font-mono">
-                        {rgb?.b || 0}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[rgb?.b || 0]}
-                      onValueChange={([v]) => handleRgbChange(undefined, undefined, v)}
-                      max={255}
-                      step={1}
-                    />
-                  </div>
-                </TabsContent>
-              </Tabs>
+              <GradientEditor
+                stops={
+                  point.gradientStops && point.gradientStops.length > 0
+                    ? point.gradientStops
+                    : [
+                        { id: 'stop-1', color: point.color, position: 0 },
+                        { id: 'stop-2', color: point.color, position: 100 },
+                      ]
+                }
+                onChange={(stops) => {
+                  const sortedStops = [...stops].sort((a, b) => a.position - b.position);
+                  const firstColor = sortedStops[0]?.color || point.color;
+                  onUpdate({
+                    color: firstColor,
+                    gradientStops: stops,
+                    gradientColors: sortedStops.map(s => s.color),
+                    gradientType: 'solid',
+                  });
+                }}
+                gradientType={'linear'}
+                onGradientTypeChange={() => onUpdate({ gradientType: 'solid' })}
+              />
             </div>
           ) : (
             <div className="mt-4 pt-4 border-t border-border">

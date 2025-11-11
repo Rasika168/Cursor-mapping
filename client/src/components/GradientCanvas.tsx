@@ -16,6 +16,17 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Switch } from '@/components/ui/switch';
 import {
   Select,
@@ -25,6 +36,33 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import ColorPicker from './ColorPicker';
+
+function InlineEditableName({ name, onChange }: { name: string; onChange: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  useEffect(() => setValue(name), [name]);
+  return (
+    <div className="flex items-center gap-2">
+      {editing ? (
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => { setEditing(false); if (value !== name) onChange(value); }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+            if (e.key === 'Escape') { setValue(name); setEditing(false); }
+          }}
+          className="h-7"
+          autoFocus
+        />
+      ) : (
+        <div className="text-sm font-medium select-none" onDoubleClick={() => setEditing(true)}>
+          {name}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export interface GradientStop {
   id: string;
@@ -56,6 +94,21 @@ export interface GradientPoint {
   height?: number;
 }
 
+type AppMap = {
+  id: string;
+  title: string;
+  points: GradientPoint[] | string;
+  settings: any;
+};
+
+type AppFile = {
+  id: string;
+  title: string;
+  saved?: boolean;
+  maps: AppMap[];
+  currentMapId: string | null;
+};
+
 interface GradientCanvasProps {
   onPointsChange?: (points: GradientPoint[]) => void;
 }
@@ -72,6 +125,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
   const [panJustEnded, setPanJustEnded] = useState(false);
   const [dragJustEnded, setDragJustEnded] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [baseScale] = useState(0.7);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [showGrid, setShowGrid] = useState(true);
@@ -95,12 +149,17 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
   const [fontColor, setFontColor] = useState('#ffffff');
   const [isDarkMode, setIsDarkMode] = useState(true);
 
-  // Maps management state
-  const [maps, setMaps] = useState<Array<{ id: string; title: string; points: GradientPoint[]; settings: any }>>([]);
-  const [currentMapId, setCurrentMapId] = useState<string | null>(null);
+  // Files and maps model
+  const [files, setFiles] = useState<AppFile[]>([]);
+  const [currentFileId, setCurrentFileId] = useState<string | null>(null);
+  const [openFileIds, setOpenFileIds] = useState<string[]>([]);
   const [editingMapId, setEditingMapId] = useState<string | null>(null);
   const [editingMapTitle, setEditingMapTitle] = useState('');
   const [isLoadingMaps, setIsLoadingMaps] = useState(false);
+
+  const currentFile = files.find(f => f.id === currentFileId) || null;
+  const currentMapId = currentFile?.currentMapId || null;
+  const maps = currentFile?.maps || [];
 
   const saveToHistory = useCallback((newPoints: GradientPoint[]) => {
     const newHistory = history.slice(0, historyIndex + 1);
@@ -128,8 +187,39 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     setIsLoadingMaps(true);
     try {
       const response = await fetch('/api/maps');
-      const data = await response.json();
-      setMaps(data);
+      if (!response.ok) {
+        // initialize with one empty file
+        if (files.length === 0) {
+          const newFile: AppFile = {
+            id: `file-${Date.now()}`,
+            title: 'Untitled',
+            saved: false,
+            maps: [],
+            currentMapId: null,
+          };
+          setFiles([newFile]);
+          setCurrentFileId(newFile.id);
+          setOpenFileIds([newFile.id]);
+        }
+      } else {
+        const data = await response.json();
+        const initialMaps: AppMap[] = (Array.isArray(data) ? data : []).map((m: any) => ({
+          id: m.id,
+          title: m.title,
+          points: m.points,
+          settings: m.settings,
+        }));
+        const newFile: AppFile = {
+          id: `file-${Date.now()}`,
+          title: 'Imported',
+          saved: true,
+          maps: initialMaps,
+          currentMapId: initialMaps[0]?.id ?? null,
+        };
+        setFiles([newFile]);
+        setCurrentFileId(newFile.id);
+        setOpenFileIds([newFile.id]);
+      }
     } catch (error) {
       console.error('Failed to load maps:', error);
     } finally {
@@ -162,18 +252,66 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: 'New Map',
-          points: JSON.stringify(points),
+          points: JSON.stringify([]),
           settings: JSON.stringify(settings)
         })
       });
 
-      const newMap = await response.json();
-      setMaps([...maps, newMap]);
-      setCurrentMapId(newMap.id);
+      if (!response.ok) {
+        // Offline/local fallback: create map inside current file
+        const localMap: AppMap = {
+          id: `map-${Date.now()}`,
+          title: 'New Map',
+          points: JSON.stringify([]),
+          settings: JSON.stringify(settings),
+        };
+        setFiles(prev => prev.map(f => {
+          if (f.id !== currentFileId) return f;
+          const mapsNext = [...f.maps, localMap];
+          return { ...f, maps: mapsNext, currentMapId: localMap.id };
+        }));
+        // New map should start empty
+        setPoints([]);
+        // apply settings to state
+        setBackgroundColor(settings.backgroundColor);
+        setShowGrid(settings.showGrid);
+        setGridSize(settings.gridSize);
+        setGridOpacity(settings.gridOpacity);
+        setGridColor(settings.gridColor);
+        setShowOverlays(settings.showOverlays);
+        setTopLabel(settings.topLabel);
+        setRightLabel(settings.rightLabel);
+        setBottomLabel(settings.bottomLabel);
+        setLeftLabel(settings.leftLabel);
+        setFontFamily(settings.fontFamily);
+        setFontSize(settings.fontSize);
+        setFontColor(settings.fontColor);
+        setPan(settings.pan);
+        setZoom(settings.zoom);
+      } else {
+        const newMap = await response.json();
+        if (!newMap || !newMap.id) {
+          console.error('Create map returned invalid payload:', newMap);
+          return;
+        }
+        const toAdd: AppMap = {
+          id: newMap.id,
+          title: newMap.title,
+          points: newMap.points,
+          settings: newMap.settings,
+        };
+        setFiles(prev => prev.map(f => {
+          if (f.id !== currentFileId) return f;
+          const mapsNext = [...f.maps, toAdd];
+          return { ...f, maps: mapsNext, currentMapId: toAdd.id };
+        }));
+        // New map should start empty
+        setPoints([]);
+      }
     } catch (error) {
       console.error('Failed to create map:', error);
     }
-  }, [points, backgroundColor, showGrid, gridSize, gridOpacity, gridColor, showOverlays, topLabel, rightLabel, bottomLabel, leftLabel, fontFamily, fontSize, fontColor, pan, zoom, maps]);
+  }, [points, backgroundColor, showGrid, gridSize, gridOpacity, gridColor, showOverlays, topLabel, rightLabel, bottomLabel, leftLabel, fontFamily, fontSize, fontColor, pan, zoom, currentFileId]);
 
   const saveCurrentMap = useCallback(async () => {
     if (!currentMapId) return;
@@ -206,45 +344,132 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
         })
       });
 
-      const updatedMap = await response.json();
-      setMaps(maps.map(m => m.id === currentMapId ? updatedMap : m));
+      if (!response.ok) {
+        // Local fallback update within current file
+        setFiles(prev => prev.map(f => {
+          if (f.id !== currentFileId) return f;
+          const mapsNext = f.maps.map(m => m.id === currentMapId
+            ? { ...m, points: JSON.stringify(points), settings: JSON.stringify(settings) }
+            : m);
+          return { ...f, maps: mapsNext };
+        }));
+      } else {
+        const updatedMap = await response.json();
+        setFiles(prev => prev.map(f => {
+          if (f.id !== currentFileId) return f;
+          const mapsNext = f.maps.map(m => m.id === currentMapId
+            ? { ...m, points: updatedMap.points, settings: updatedMap.settings, title: updatedMap.title }
+            : m);
+          return { ...f, maps: mapsNext };
+        }));
+      }
     } catch (error) {
       console.error('Failed to save map:', error);
     }
-  }, [currentMapId, points, backgroundColor, showGrid, gridSize, gridOpacity, gridColor, showOverlays, topLabel, rightLabel, bottomLabel, leftLabel, fontFamily, fontSize, fontColor, pan, zoom, maps]);
+  }, [currentFileId, currentMapId, points, backgroundColor, showGrid, gridSize, gridOpacity, gridColor, showOverlays, topLabel, rightLabel, bottomLabel, leftLabel, fontFamily, fontSize, fontColor, pan, zoom]);
+  
+  // Autosave whenever points or settings change for the selected map
+  useEffect(() => {
+    if (!currentMapId) return;
+    const timeoutId = window.setTimeout(() => {
+      void saveCurrentMap();
+    }, 500);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [currentMapId, points, backgroundColor, showGrid, gridSize, gridOpacity, gridColor, showOverlays, topLabel, rightLabel, bottomLabel, leftLabel, fontFamily, fontSize, fontColor, pan, zoom, saveCurrentMap]);
+
+  // Keep current map's points/settings in file state in real-time to avoid carryover
+  useEffect(() => {
+    if (!currentFile || !currentMapId) return;
+    setFiles(prev => prev.map(f => {
+      if (f.id !== currentFile.id) return f;
+      const mapsNext = f.maps.map(m => m.id === currentMapId ? { ...m, points: JSON.stringify(points) } : m);
+      return { ...f, maps: mapsNext };
+    }));
+  }, [points, currentFileId, currentMapId]);
 
   const loadMap = useCallback(async (mapId: string) => {
     try {
       const response = await fetch(`/api/maps/${mapId}`);
-      const map = await response.json();
-
-      const loadedPoints = typeof map.points === 'string' ? JSON.parse(map.points) : map.points;
-      const loadedSettings = typeof map.settings === 'string' ? JSON.parse(map.settings) : map.settings;
-
-      setPoints(loadedPoints);
-      setCurrentMapId(map.id);
-
-      if (loadedSettings) {
-        if (loadedSettings.backgroundColor) setBackgroundColor(loadedSettings.backgroundColor);
-        if (loadedSettings.showGrid !== undefined) setShowGrid(loadedSettings.showGrid);
-        if (loadedSettings.gridSize) setGridSize(loadedSettings.gridSize);
-        if (loadedSettings.gridOpacity) setGridOpacity(loadedSettings.gridOpacity);
-        if (loadedSettings.gridColor) setGridColor(loadedSettings.gridColor);
-        if (loadedSettings.showOverlays !== undefined) setShowOverlays(loadedSettings.showOverlays);
-        if (loadedSettings.topLabel) setTopLabel(loadedSettings.topLabel);
-        if (loadedSettings.rightLabel) setRightLabel(loadedSettings.rightLabel);
-        if (loadedSettings.bottomLabel) setBottomLabel(loadedSettings.bottomLabel);
-        if (loadedSettings.leftLabel) setLeftLabel(loadedSettings.leftLabel);
-        if (loadedSettings.fontFamily) setFontFamily(loadedSettings.fontFamily);
-        if (loadedSettings.fontSize) setFontSize(loadedSettings.fontSize);
-        if (loadedSettings.fontColor) setFontColor(loadedSettings.fontColor);
-        if (loadedSettings.pan) setPan(loadedSettings.pan);
-        if (loadedSettings.zoom) setZoom(loadedSettings.zoom);
+      if (!response.ok) {
+        // Local fallback from current file maps
+        const local = maps.find(m => m.id === mapId);
+        if (!local) return;
+        const loadedPoints = typeof local.points === 'string' ? (() => { try { return JSON.parse(local.points); } catch { return []; } })() : local.points;
+        const loadedSettings = typeof local.settings === 'string' ? (() => { try { return JSON.parse(local.settings); } catch { return undefined; } })() : local.settings;
+        setPoints(Array.isArray(loadedPoints) ? loadedPoints : []);
+        setFiles(prev => prev.map(f => f.id === currentFileId ? { ...f, currentMapId: local.id } : f));
+        if (loadedSettings) {
+          if (loadedSettings.backgroundColor) setBackgroundColor(loadedSettings.backgroundColor);
+          if (loadedSettings.showGrid !== undefined) setShowGrid(loadedSettings.showGrid);
+          if (loadedSettings.gridSize) setGridSize(loadedSettings.gridSize);
+          if (loadedSettings.gridOpacity !== undefined) setGridOpacity(loadedSettings.gridOpacity);
+          if (loadedSettings.gridColor) setGridColor(loadedSettings.gridColor);
+          if (loadedSettings.showOverlays !== undefined) setShowOverlays(loadedSettings.showOverlays);
+          if (loadedSettings.topLabel) setTopLabel(loadedSettings.topLabel);
+          if (loadedSettings.rightLabel) setRightLabel(loadedSettings.rightLabel);
+          if (loadedSettings.bottomLabel) setBottomLabel(loadedSettings.bottomLabel);
+          if (loadedSettings.leftLabel) setLeftLabel(loadedSettings.leftLabel);
+          if (loadedSettings.fontFamily) setFontFamily(loadedSettings.fontFamily);
+          if (loadedSettings.fontSize) setFontSize(loadedSettings.fontSize);
+          if (loadedSettings.fontColor) setFontColor(loadedSettings.fontColor);
+          if (loadedSettings.pan) setPan(loadedSettings.pan);
+          if (loadedSettings.zoom) setZoom(loadedSettings.zoom);
+        }
+      } else {
+        const map = await response.json();
+        const loadedPoints = typeof map.points === 'string' ? JSON.parse(map.points) : map.points;
+        const loadedSettings = typeof map.settings === 'string' ? JSON.parse(map.settings) : map.settings;
+        setPoints(Array.isArray(loadedPoints) ? loadedPoints : []);
+        setFiles(prev => prev.map(f => f.id === currentFileId ? { ...f, currentMapId: map.id } : f));
+        if (loadedSettings) {
+          if (loadedSettings.backgroundColor) setBackgroundColor(loadedSettings.backgroundColor);
+          if (loadedSettings.showGrid !== undefined) setShowGrid(loadedSettings.showGrid);
+          if (loadedSettings.gridSize) setGridSize(loadedSettings.gridSize);
+          if (loadedSettings.gridOpacity !== undefined) setGridOpacity(loadedSettings.gridOpacity);
+          if (loadedSettings.gridColor) setGridColor(loadedSettings.gridColor);
+          if (loadedSettings.showOverlays !== undefined) setShowOverlays(loadedSettings.showOverlays);
+          if (loadedSettings.topLabel) setTopLabel(loadedSettings.topLabel);
+          if (loadedSettings.rightLabel) setRightLabel(loadedSettings.rightLabel);
+          if (loadedSettings.bottomLabel) setBottomLabel(loadedSettings.bottomLabel);
+          if (loadedSettings.leftLabel) setLeftLabel(loadedSettings.leftLabel);
+          if (loadedSettings.fontFamily) setFontFamily(loadedSettings.fontFamily);
+          if (loadedSettings.fontSize) setFontSize(loadedSettings.fontSize);
+          if (loadedSettings.fontColor) setFontColor(loadedSettings.fontColor);
+          if (loadedSettings.pan) setPan(loadedSettings.pan);
+          if (loadedSettings.zoom) setZoom(loadedSettings.zoom);
+        }
       }
     } catch (error) {
       console.error('Failed to load map:', error);
+      // Final fallback: try local state
+      const local = maps.find(m => m.id === mapId);
+      if (local) {
+        const loadedPoints = typeof local.points === 'string' ? (() => { try { return JSON.parse(local.points); } catch { return []; } })() : local.points;
+        const loadedSettings = typeof local.settings === 'string' ? (() => { try { return JSON.parse(local.settings); } catch { return undefined; } })() : local.settings;
+        setPoints(Array.isArray(loadedPoints) ? loadedPoints : []);
+        setFiles(prev => prev.map(f => f.id === currentFileId ? { ...f, currentMapId: local.id } : f));
+        if (loadedSettings) {
+          if (loadedSettings.backgroundColor) setBackgroundColor(loadedSettings.backgroundColor);
+          if (loadedSettings.showGrid !== undefined) setShowGrid(loadedSettings.showGrid);
+          if (loadedSettings.gridSize) setGridSize(loadedSettings.gridSize);
+          if (loadedSettings.gridOpacity !== undefined) setGridOpacity(loadedSettings.gridOpacity);
+          if (loadedSettings.gridColor) setGridColor(loadedSettings.gridColor);
+          if (loadedSettings.showOverlays !== undefined) setShowOverlays(loadedSettings.showOverlays);
+          if (loadedSettings.topLabel) setTopLabel(loadedSettings.topLabel);
+          if (loadedSettings.rightLabel) setRightLabel(loadedSettings.rightLabel);
+          if (loadedSettings.bottomLabel) setBottomLabel(loadedSettings.bottomLabel);
+          if (loadedSettings.leftLabel) setLeftLabel(loadedSettings.leftLabel);
+          if (loadedSettings.fontFamily) setFontFamily(loadedSettings.fontFamily);
+          if (loadedSettings.fontSize) setFontSize(loadedSettings.fontSize);
+          if (loadedSettings.fontColor) setFontColor(loadedSettings.fontColor);
+          if (loadedSettings.pan) setPan(loadedSettings.pan);
+          if (loadedSettings.zoom) setZoom(loadedSettings.zoom);
+        }
+      }
     }
-  }, []);
+  }, [maps, currentFileId]);
 
   const updateMapTitle = useCallback(async (mapId: string, title: string) => {
     try {
@@ -254,13 +479,59 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
         body: JSON.stringify({ title })
       });
 
-      const updatedMap = await response.json();
-      setMaps(maps.map(m => m.id === mapId ? updatedMap : m));
+      if (!response.ok) {
+        // Local fallback title update inside current file
+        setFiles(prev => prev.map(f => {
+          if (f.id !== currentFileId) return f;
+          return {
+            ...f,
+            maps: f.maps.map(m => m.id === mapId ? { ...m, title } : m),
+          };
+        }));
+      } else {
+        const updatedMap = await response.json();
+        setFiles(prev => prev.map(f => {
+          if (f.id !== currentFileId) return f;
+          return {
+            ...f,
+            maps: f.maps.map(m => m.id === mapId ? { ...m, title: updatedMap.title } : m),
+          };
+        }));
+      }
       setEditingMapId(null);
     } catch (error) {
       console.error('Failed to update map title:', error);
     }
-  }, [maps]);
+  }, [currentFileId]);
+
+  // Save current file (with optional rename)
+  const saveCurrentFile = useCallback(async (forceRename = false) => {
+    if (!currentMapId) return;
+    const current = maps.find(m => m.id === currentMapId);
+    if (!current) return;
+    let name = current.title || '';
+    if (forceRename || !current.saved || !name || name === 'Untitled') {
+      const proposed = name && name !== 'Untitled' ? name : '';
+      const input = prompt('Save file as:', proposed);
+      if (!input) return;
+      name = input;
+    }
+    await updateMapTitle(currentMapId, name);
+    await saveCurrentMap();
+  }, [currentMapId, maps, updateMapTitle, saveCurrentMap]);
+
+  const closeTab = useCallback((mapId: string) => {
+    setOpenMapIds((ids) => {
+      const next = ids.filter(id => id !== mapId);
+      if (currentMapId === mapId) {
+        setCurrentMapId(next[next.length - 1] || null);
+        if (!next.length) {
+          setPoints([]);
+        }
+      }
+      return next;
+    });
+  }, [currentMapId]);
 
   const deleteMap = useCallback(async (mapId: string) => {
     try {
@@ -268,30 +539,76 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
         method: 'DELETE'
       });
 
-      setMaps(maps.filter(m => m.id !== mapId));
-      if (currentMapId === mapId) {
-        setCurrentMapId(null);
-      }
+      setFiles(prev => prev.map(f => {
+        if (f.id !== currentFileId) return f;
+        const filtered = f.maps.filter(m => m.id !== mapId);
+        const nextCurrent = f.currentMapId === mapId ? null : f.currentMapId;
+        return { ...f, maps: filtered, currentMapId: nextCurrent };
+      }));
+      if (currentMapId === mapId) setPoints([]); // canvas empty when no map
     } catch (error) {
       console.error('Failed to delete map:', error);
     }
-  }, [maps, currentMapId]);
+  }, [currentFileId, currentMapId]);
 
   useEffect(() => {
     loadMaps();
   }, [loadMaps]);
 
   const addPoint = useCallback((x: number, y: number) => {
+    // Ensure a file is always present
+    if (!currentFile) {
+      const newFile: AppFile = {
+        id: `file-${Date.now()}`,
+        title: 'Untitled',
+        saved: false,
+        maps: [],
+        currentMapId: null,
+      };
+      setFiles([newFile]);
+      setCurrentFileId(newFile.id);
+      setOpenFileIds([newFile.id]);
+    }
+    // Auto-create a map in the current file if none selected
+    if (!currentMapId && currentFile) {
+      const settings = {
+        backgroundColor,
+        showGrid,
+        gridSize,
+        gridOpacity,
+        gridColor,
+        showOverlays,
+        topLabel,
+        rightLabel,
+        bottomLabel,
+        leftLabel,
+        fontFamily,
+        fontSize,
+        fontColor,
+        pan,
+        zoom
+      };
+      const newMap: AppMap = {
+        id: `map-${Date.now()}`,
+        title: 'New Map',
+        points: JSON.stringify([]),
+        settings: JSON.stringify(settings),
+      };
+      setFiles(prev => prev.map(f => {
+        if (f.id !== currentFile.id) return f;
+        return { ...f, maps: [...f.maps, newMap], currentMapId: newMap.id };
+      }));
+    }
     const newPoint: GradientPoint = {
       id: `point-${Date.now()}`,
-      name: `Point ${points.length + 1}`,
+      name: 'Point',
       x: x - pan.x,
       y: y - pan.y,
       color: '#3b82f6',
       opacity: 1,
       radius: 150,
       edgeType: 'soft',
-      shape: 'blob',
+      shape: 'circle',
       focusX: 0,
       focusY: 0,
       gradientType: 'solid',
@@ -307,7 +624,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     setPoints(newPoints);
     saveToHistory(newPoints);
     setSelectedPoint(newPoint.id);
-  }, [points, saveToHistory, pan]);
+  }, [points, saveToHistory, pan, currentMapId, currentFile, backgroundColor, showGrid, gridSize, gridOpacity, gridColor, showOverlays, topLabel, rightLabel, bottomLabel, leftLabel, fontFamily, fontSize, fontColor, pan, zoom]);
 
   const duplicatePoint = useCallback((pointId: string) => {
     const point = points.find(p => p.id === pointId);
@@ -315,7 +632,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
       const newPoint = {
         ...point,
         id: `point-${Date.now()}`,
-        name: point.name ? `${point.name} Copy` : `Point ${points.length + 1} Copy`,
+        name: point.name ? `${point.name} Copy` : 'Point Copy',
         x: point.x + 20,
         y: point.y + 20,
       };
@@ -450,7 +767,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     
     ctx.setLineDash([]);
 
-    points.forEach(point => {
+    ;[...points].reverse().forEach(point => {
       const screenX = point.x + pan.x;
       const screenY = point.y + pan.y;
       const focusX = screenX + point.focusX;
@@ -534,13 +851,22 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
       
       // Draw shape
       if (point.shape === 'blob') {
-        // For blob shapes, use clipping to constrain the fill
-        ctx.save();
+        // Draw a blobby organic shape using a deterministic noisy circle
+        const segments = 16;
+        const base = point.radius;
+        const seed = hashString(point.id);
+        const rand = seededRandom(seed);
         ctx.beginPath();
-        ctx.arc(screenX, screenY, point.radius, 0, Math.PI * 2);
-        ctx.clip();
-        ctx.fillRect(screenX - point.radius, screenY - point.radius, point.radius * 2, point.radius * 2);
-        ctx.restore();
+        for (let i = 0; i <= segments; i++) {
+          const t = (i / segments) * Math.PI * 2;
+          const noise = 0.85 + rand() * 0.3; // 0.85 - 1.15
+          const r = base * noise;
+          const x = screenX + Math.cos(t) * r;
+          const y = screenY + Math.sin(t) * r;
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+        ctx.fill();
       } else if (point.shape === 'circle') {
         ctx.beginPath();
         ctx.arc(screenX, screenY, point.radius, 0, Math.PI * 2);
@@ -558,7 +884,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     });
 
     // Render images without borders (simple clipped image with opacity and scale)
-    points.forEach(point => {
+    ;[...points].reverse().forEach(point => {
       if (point.image && loadedImages.has(point.image)) {
         const screenX = point.x + pan.x;
         const screenY = point.y + pan.y;
@@ -578,8 +904,21 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
 
         // Clip to shape
         ctx.beginPath();
-        if (imageShape === 'circle' || imageShape === 'blob') {
+        if (imageShape === 'circle') {
           ctx.arc(screenX, screenY, radius, 0, Math.PI * 2);
+        } else if (imageShape === 'blob') {
+          const segments = 16;
+          const seed = hashString(point.id) + 101;
+          const rand = seededRandom(seed);
+          for (let i = 0; i <= segments; i++) {
+            const t = (i / segments) * Math.PI * 2;
+            const noise = 0.85 + rand() * 0.3;
+            const r = radius * noise;
+            const x = screenX + Math.cos(t) * r;
+            const y = screenY + Math.sin(t) * r;
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.closePath();
         } else if (imageShape === 'square') {
           ctx.rect(screenX - width / 2, screenY - height / 2, width, height);
         } else if (imageShape === 'rectangle') {
@@ -624,7 +963,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     });
 
     if (showOverlays) {
-      points.forEach(point => {
+      ;[...points].reverse().forEach(point => {
         const screenX = point.x + pan.x;
         const screenY = point.y + pan.y;
         
@@ -769,12 +1108,19 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const tag = (document.activeElement && (document.activeElement as HTMLElement).tagName) || '';
+      const isTyping = ['INPUT', 'TEXTAREA'].includes(tag);
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Z') {
         e.preventDefault();
         redo();
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         undo();
+      } else if (!isTyping && (e.key === 'Delete' || e.key === 'Backspace')) {
+        if (selectedPoint) {
+          e.preventDefault();
+          deletePoint(selectedPoint);
+        }
       }
     };
 
@@ -782,7 +1128,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [undo, redo]);
+  }, [undo, redo, selectedPoint, deletePoint]);
 
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const pos = getCursorPosition(e);
@@ -962,6 +1308,121 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
           <h1 className="text-sm font-semibold">Gradient Canvas</h1>
 
           <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="sm" variant="outline" data-testid="button-file-menu">
+                  Files
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem
+                  onClick={() => {
+                    const newFile: AppFile = {
+                      id: `file-${Date.now()}`,
+                      title: 'Untitled',
+                      saved: false,
+                      maps: [],
+                      currentMapId: null,
+                    };
+                    setFiles(prev => [...prev, newFile]);
+                    setCurrentFileId(newFile.id);
+                    setOpenFileIds(ids => [...ids.filter(id => id !== newFile.id), newFile.id]);
+                    setPoints([]);
+                  }}
+                  data-testid="menu-new-file"
+                >
+                  New File
+                </DropdownMenuItem>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger data-testid="menu-open-file">Open</DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    {files.length === 0 ? (
+                      <DropdownMenuItem disabled>No files</DropdownMenuItem>
+                    ) : (
+                      files.map(f => (
+                        <DropdownMenuItem key={f.id} onClick={() => { setCurrentFileId(f.id); setOpenFileIds(ids => ids.includes(f.id) ? ids : [...ids, f.id]); setPoints(() => {
+                          const cm = f.maps.find(m => m.id === f.currentMapId);
+                          const pts = cm ? (typeof cm.points === 'string' ? (() => { try { return JSON.parse(cm.points as any); } catch { return []; } })() : cm.points) : [];
+                          return Array.isArray(pts) ? pts : [];
+                        }); }} data-testid={`menu-open-${f.id}`}>
+                          {f.title || 'Untitled'}
+                        </DropdownMenuItem>
+                      ))
+                    )}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+                <DropdownMenuItem
+                  onClick={() => {
+                    // Save current file
+                    if (!currentFile) return;
+                    let name = currentFile.title;
+                    if (!currentFile.saved || !name || name === 'Untitled') {
+                      const input = prompt('Save file as:', name && name !== 'Untitled' ? name : '');
+                      if (!input) return;
+                      name = input;
+                    }
+                    setFiles(prev => prev.map(f => f.id === currentFile.id ? { ...f, title: name, saved: true } : f));
+                  }}
+                  data-testid="menu-save-file"
+                >
+                  Save
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!currentFile}
+                  onClick={() => {
+                    if (!currentFile) return;
+                    const input = prompt('Save file as:', currentFile.title && currentFile.title !== 'Untitled' ? currentFile.title : '');
+                    if (!input) return;
+                    setFiles(prev => prev.map(f => f.id === currentFile.id ? { ...f, title: input, saved: true } : f));
+                  }}
+                  data-testid="menu-save-as-file"
+                >
+                  Save As…
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  disabled={!currentFile}
+                  onClick={() => {
+                    if (!currentFile) return;
+                    const input = prompt('Rename file to:', currentFile.title || '');
+                    if (!input) return;
+                    setFiles(prev => prev.map(f => f.id === currentFile.id ? { ...f, title: input } : f));
+                  }}
+                  data-testid="menu-rename-file"
+                >
+                  Rename
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  disabled={!currentFile}
+                  onClick={() => {
+                    if (!currentFile) return;
+                    if (!confirm('Delete this file?')) return;
+                    setFiles(prev => prev.filter(f => f.id !== currentFile.id));
+                    setOpenFileIds(ids => ids.filter(id => id !== currentFile.id));
+                    // Always keep at least one file open
+                    const next = files.find(f => f.id !== currentFile.id);
+                    if (next) {
+                      setCurrentFileId(next.id);
+                      setOpenFileIds(ids => ids.includes(next.id) ? ids : [...ids, next.id]);
+                      // reflect its current map on canvas
+                      const cm = next.maps.find(m => m.id === next.currentMapId);
+                      const pts = cm ? (typeof cm.points === 'string' ? (() => { try { return JSON.parse(cm.points as any); } catch { return []; } })() : cm.points) : [];
+                      setPoints(Array.isArray(pts) ? pts : []);
+                    } else {
+                      // create a new empty file if none left
+                      const newFile: AppFile = { id: `file-${Date.now()}`, title: 'Untitled', saved: false, maps: [], currentMapId: null };
+                      setFiles([newFile]);
+                      setCurrentFileId(newFile.id);
+                      setOpenFileIds([newFile.id]);
+                      setPoints([]);
+                    }
+                  }}
+                  data-testid="menu-delete-file"
+                >
+                  Delete
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1025,6 +1486,62 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
             </Tooltip>
           </div>
         </header>
+        {openFileIds.length > 0 && (
+          <div className="flex items-center gap-1 px-2 py-1 border-b border-border bg-card overflow-x-auto">
+            {openFileIds.map(id => {
+              const f = files.find(x => x.id === id);
+              if (!f) return null;
+              const isActive = currentFileId === id;
+              return (
+                <div
+                  key={id}
+                  className={`flex items-center gap-2 px-3 py-1 rounded-md cursor-pointer whitespace-nowrap ${
+                    isActive ? 'bg-accent text-accent-foreground' : 'hover:bg-muted'
+                  }`}
+                  onClick={() => {
+                    setCurrentFileId(id);
+                    // Refresh canvas with the file's current map if any
+                    const cm = f.maps.find(m => m.id === f.currentMapId);
+                    const pts = cm ? (typeof cm.points === 'string' ? (() => { try { return JSON.parse(cm.points as any); } catch { return []; } })() : cm.points) : [];
+                    setPoints(Array.isArray(pts) ? pts : []);
+                  }}
+                >
+                  <span className="text-xs">{f.title || 'Untitled'}</span>
+                  <button
+                    className="text-xs opacity-70 hover:opacity-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Close file tab, keep file in list
+                      setOpenFileIds(ids => ids.filter(fid => fid !== id));
+                      if (currentFileId === id) {
+                        // Switch to another open file or ensure a file remains open
+                        const remaining = openFileIds.filter(fid => fid !== id);
+                        const nextId = remaining[remaining.length - 1] || files.find(fl => fl.id !== id)?.id || null;
+                        if (nextId) {
+                          setCurrentFileId(nextId);
+                          const nf = files.find(fl => fl.id === nextId) || null;
+                          const cm = nf?.maps.find(m => m.id === nf.currentMapId);
+                          const pts = cm ? (typeof cm.points === 'string' ? (() => { try { return JSON.parse(cm.points as any); } catch { return []; } })() : cm.points) : [];
+                          setPoints(Array.isArray(pts) ? pts : []);
+                        } else {
+                          // if nothing, create a new empty file
+                          const newFile: AppFile = { id: `file-${Date.now()}`, title: 'Untitled', saved: false, maps: [], currentMapId: null };
+                          setFiles([newFile]);
+                          setCurrentFileId(newFile.id);
+                          setOpenFileIds([newFile.id]);
+                          setPoints([]);
+                        }
+                      }
+                    }}
+                    aria-label="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         <div 
           className="relative flex-1 overflow-hidden"
@@ -1043,6 +1560,16 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
             backgroundSize: showGrid ? `${gridSize * zoom}px ${gridSize * zoom}px` : undefined,
             backgroundPosition: showGrid ? `calc(50% + ${pan.x * zoom}px) calc(50% + ${pan.y * zoom}px)` : undefined
           }}
+          onWheel={(e) => {
+            e.preventDefault();
+            const delta = Math.sign(e.deltaY);
+            const step = 0.1;
+            if (delta > 0) {
+              setZoom((z) => Math.max(0.5, z - step));
+            } else if (delta < 0) {
+              setZoom((z) => Math.min(2, z + step));
+            }
+          }}
         >
           <ContextMenu>
             <ContextMenuTrigger asChild>
@@ -1055,7 +1582,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
                     className="block"
                     style={{ 
                       cursor: cursorStyle,
-                      transform: `scale(${zoom})`,
+                      transform: `scale(${zoom * baseScale})`,
                       transformOrigin: 'center center'
                     }}
                     onClick={handleCanvasClick}
@@ -1071,7 +1598,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
                     height={800}
                     className="absolute top-0 left-0 pointer-events-none"
                     style={{ 
-                      transform: `scale(${zoom})`,
+                      transform: `scale(${zoom * baseScale})`,
                       transformOrigin: 'center center'
                     }}
                     data-testid="canvas-labels"
@@ -1140,7 +1667,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
 
           <TabsContent value="points" className="p-4 space-y-4 mt-0">
             <div>
-              <h3 className="text-xs font-semibold uppercase tracking-wide mb-3">Gradient Points</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wide mb-3">Layers</h3>
               {points.length === 0 ? (
                 <p className="text-sm text-muted-foreground">Click on canvas to add points</p>
               ) : (
@@ -1159,14 +1686,51 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
                           className="w-6 h-6 rounded-md border border-border"
                           style={{ backgroundColor: point.color }}
                         />
-                        <div>
-                          <div className="text-sm font-medium">{point.name || `Point ${index + 1}`}</div>
-                          <div className="text-xs text-muted-foreground font-mono">
-                            {Math.round(point.x)}, {Math.round(point.y)}
-                          </div>
-                        </div>
+                        <InlineEditableName
+                          name={point.name || `Point ${index + 1}`}
+                          onChange={(val) => {
+                            updatePoint(point.id, { name: val });
+                            saveToHistory(points.map(p => p.id === point.id ? { ...p, name: val } : p));
+                          }}
+                        />
+                          {/* coordinates removed by request */}
+                        
                       </div>
                       <div className="flex items-center gap-1">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (index <= 0) return;
+                            const newPoints = [...points];
+                            const [item] = newPoints.splice(index, 1);
+                            newPoints.splice(index - 1, 0, item);
+                            setPoints(newPoints);
+                            saveToHistory(newPoints);
+                          }}
+                          title="Move Up"
+                        >
+                          ↑
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-8 w-8"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (index >= points.length - 1) return;
+                            const newPoints = [...points];
+                            const [item] = newPoints.splice(index, 1);
+                            newPoints.splice(index + 1, 0, item);
+                            setPoints(newPoints);
+                            saveToHistory(newPoints);
+                          }}
+                          title="Move Down"
+                        >
+                          ↓
+                        </Button>
                         <Button
                           size="icon"
                           variant="ghost"
@@ -1201,22 +1765,6 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
             {selectedPointData && (
               <>
                 <div className="pt-4 border-t border-border space-y-4">
-                  <div>
-                    <Label htmlFor="point-name" className="text-xs uppercase tracking-wide mb-2 block">Point Name</Label>
-                    <Input
-                      id="point-name"
-                      type="text"
-                      value={selectedPointData.name || ''}
-                      onChange={(e) => {
-                        updatePoint(selectedPointData.id, { name: e.target.value });
-                        saveToHistory(points.map(p => p.id === selectedPointData.id ? { ...p, name: e.target.value } : p));
-                      }}
-                      placeholder={`Point ${points.findIndex(p => p.id === selectedPointData.id) + 1}`}
-                      className="h-9"
-                      data-testid="input-point-name"
-                    />
-                  </div>
-                  
                   <ColorPicker
                     point={selectedPointData}
                     onUpdate={(updates) => {
@@ -1462,22 +2010,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
                 </Button>
               </div>
 
-              {currentMapId && (
-                <div className="p-3 bg-accent/50 rounded-lg mb-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-muted-foreground">Current Map</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={saveCurrentMap}
-                      data-testid="button-save-current-map"
-                    >
-                      <Save className="w-3 h-3 mr-1" />
-                      Save
-                    </Button>
-                  </div>
-                </div>
-              )}
+              {/* Current map banner and Save button removed; autosave is enabled */}
 
               {isLoadingMaps ? (
                 <p className="text-sm text-muted-foreground">Loading maps...</p>
@@ -1537,13 +2070,23 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
                             onClick={() => loadMap(map.id)}
                           >
                             <div className="text-sm font-medium">{map.title}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {typeof map.points === 'string' ? JSON.parse(map.points).length : map.points.length} points
-                              {map.settings && (() => {
-                                const settings = typeof map.settings === 'string' ? JSON.parse(map.settings) : map.settings;
-                                return settings.topLabel ? ` • ${settings.topLabel}, ${settings.rightLabel}, ${settings.bottomLabel}, ${settings.leftLabel}` : '';
-                              })()}
-                            </div>
+                              <div className="text-xs text-muted-foreground">
+                                {(() => {
+                                  const parsedPoints = typeof map.points === 'string'
+                                    ? (() => { try { return JSON.parse(map.points); } catch { return []; } })()
+                                    : map.points;
+                                  const count = Array.isArray(parsedPoints) ? parsedPoints.length : 0;
+                                  return `${count} points`;
+                                })()}
+                                {(() => {
+                                  const parsedSettings = typeof map.settings === 'string'
+                                    ? (() => { try { return JSON.parse(map.settings); } catch { return undefined; } })()
+                                    : map.settings;
+                                  return parsedSettings && parsedSettings.topLabel
+                                    ? ` • ${parsedSettings.topLabel}, ${parsedSettings.rightLabel}, ${parsedSettings.bottomLabel}, ${parsedSettings.leftLabel}`
+                                    : '';
+                                })()}
+                              </div>
                           </div>
                         )}
                       </div>
@@ -1591,4 +2134,26 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } | null {
     g: parseInt(result[2], 16),
     b: parseInt(result[3], 16)
   } : null;
+}
+
+// Deterministic string hash
+function hashString(str: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return h >>> 0;
+}
+
+// Simple seeded RNG [0,1)
+function seededRandom(seed: number) {
+  let s = seed >>> 0;
+  return function () {
+    // xorshift*
+    s ^= s << 13; s >>>= 0;
+    s ^= s >> 17; s >>>= 0;
+    s ^= s << 5;  s >>>= 0;
+    return (s >>> 0) / 4294967296;
+  };
 }

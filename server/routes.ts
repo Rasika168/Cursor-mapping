@@ -3,12 +3,18 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { neon } from '@neondatabase/serverless';
 
-const sql = neon(process.env.DATABASE_URL!);
+// Initialize database connection only if a connection string is available.
+// This allows the dev server to run without a database during local development.
+const hasDatabaseUrl = typeof process.env.DATABASE_URL === "string" && process.env.DATABASE_URL.length > 0;
+const sql = hasDatabaseUrl ? neon(process.env.DATABASE_URL!) : null as unknown as ReturnType<typeof neon>;
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Get all gradient maps
   app.get('/api/maps', async (req, res) => {
     try {
+      if (!hasDatabaseUrl) {
+        return res.json([]);
+      }
       const maps = await sql`
         SELECT id, title, points, settings, created_at, updated_at
         FROM gradient_maps
@@ -25,6 +31,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/maps/:id', async (req, res) => {
     try {
       const { id } = req.params;
+      if (!hasDatabaseUrl) {
+        return res.status(404).json({ message: 'Map not found' });
+      }
       const maps = await sql`
         SELECT id, title, points, settings, created_at, updated_at
         FROM gradient_maps
@@ -45,6 +54,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Create a new map
   app.post('/api/maps', async (req, res) => {
     try {
+      if (!hasDatabaseUrl) {
+        return res.status(503).json({ message: 'Database not configured' });
+      }
       const { title, points, settings } = req.body;
       const maps = await sql`
         INSERT INTO gradient_maps (title, points, settings)
@@ -61,6 +73,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Update a map
   app.put('/api/maps/:id', async (req, res) => {
     try {
+      if (!hasDatabaseUrl) {
+        return res.status(503).json({ message: 'Database not configured' });
+      }
       const { id } = req.params;
       const { title, points, settings } = req.body;
 
@@ -97,6 +112,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Delete a map
   app.delete('/api/maps/:id', async (req, res) => {
     try {
+      if (!hasDatabaseUrl) {
+        return res.status(503).json({ message: 'Database not configured' });
+      }
       const { id } = req.params;
       const result = await sql`
         DELETE FROM gradient_maps
