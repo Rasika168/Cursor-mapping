@@ -1054,7 +1054,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     // Right label - rotated text
     ctx.save();
     ctx.translate(width - 20, height / 2);
-    ctx.rotate(Math.PI / 2);
+    ctx.rotate;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     ctx.fillText(rightLabel, 0, 0);
@@ -1068,7 +1068,7 @@ export default function GradientCanvas({ onPointsChange }: GradientCanvasProps) 
     // Left label - rotated text
     ctx.save();
     ctx.translate(20, height / 2);
-    ctx.rotate(-Math.PI / 2);
+    ctx.rotate;
     ctx.textBaseline = 'middle';
     ctx.textAlign = 'center';
     ctx.fillText(leftLabel, 0, 0);
